@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+import Foundation
 import SystemPackage
 import Testing
 
@@ -37,6 +38,32 @@ struct ZipArchiveWriterTests {
         let fileHeader = try #require(directory.first)
         let fileContents = try zipArchiveReader.readFile(fileHeader)
         #expect(fileContents == .init("Hello, world!".utf8))
+    }
+
+    @Test
+    func testAddingFileWithExplicitMetadata() throws {
+        let writer = ZipArchiveWriter()
+        let modificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let externalAttributes = Zip.ExternalAttributes.unix([
+            .isSymbolicLink,
+            .permissions([.ownerReadWrite, .groupRead, .otherRead]),
+        ])
+
+        try writer.writeFile(
+            filename: "Current",
+            contents: .init("Versions/A".utf8),
+            metadata: .init(
+                modificationDate: modificationDate,
+                externalAttributes: externalAttributes
+            )
+        )
+
+        let buffer = try writer.finalizeBuffer()
+        let reader = try ZipArchiveReader(buffer: buffer)
+        let entry = try #require(try reader.readDirectory().first)
+        #expect(entry.fileModification == modificationDate)
+        #expect(entry.externalAttributes.rawValue == externalAttributes.rawValue)
+        #expect(entry.externalAttributes.unixAttributes.contains(.isSymbolicLink))
     }
 
     @Test

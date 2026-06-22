@@ -96,7 +96,7 @@ func system_remove(
     remove(path)
 }
 
-#if !os(Windows)
+#if !os(Windows) && !os(WASI)
 
 internal typealias system_dirent = dirent
 internal let SYSTEM_DT_DIR = DT_DIR

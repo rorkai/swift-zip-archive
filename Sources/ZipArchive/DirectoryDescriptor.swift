@@ -16,13 +16,13 @@ import Musl
 import Darwin.C
 #elseif canImport(Android)
 import Android
-#elseif os(Windows)
-import FoundationEssentials
+#elseif os(Windows) || os(WASI)
+import Foundation
 #else
 #error("Unsupported platform")
 #endif
 
-#if !os(Windows)
+#if !os(Windows) && !os(WASI)
 
 /// DirectoryDescriptor using C functions
 struct DirectoryDescriptor {
@@ -95,7 +95,7 @@ struct DirectoryDescriptor {
 
 #else
 
-/// DirectoryDescriptor using FileManager (Required for Windows)
+/// DirectoryDescriptor using FileManager on platforms without directory streams.
 struct DirectoryDescriptor {
     /// Do shallow parse of files in a directory
     static func forFilesInDirectory(_ folder: FilePath, operation: (FilePath, Bool) throws -> Void) throws {

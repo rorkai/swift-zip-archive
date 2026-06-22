@@ -135,6 +135,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     /// - Parameters:
     ///   - filename: Filename of file
     ///   - contents: Contents of file
+    ///   - metadata: Modification date and external file attributes to store.
     ///   - password: Password to encrypt file with
     public func writeFile(filename: String, sourceFile: String, password: String? = nil) throws {
         try writeFile(filePath: .init(filename), sourceFilePath: .init(sourceFile), password: password)
@@ -147,6 +148,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     /// - Parameters:
     ///   - filePath: File path of file
     ///   - contents: Contents of file
+    ///   - metadata: Modification date and external file attributes to store.
     ///   - password: Password to encrypt file with
     public func writeFile(filePath: FilePath, sourceFilePath: FilePath, password: String? = nil) throws {
         let fileDescriptor = try FileDescriptor.open(
@@ -171,8 +173,18 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ///   - filename: Filename of file
     ///   - contents: Contents of file
     ///   - password: Password to encrypt file with
-    public func writeFile(filename: String, contents: [UInt8], password: String? = nil) throws {
-        try writeFile(filePath: .init(filename), contents: contents, password: password)
+    public func writeFile(
+        filename: String,
+        contents: [UInt8],
+        metadata: Zip.EntryMetadata = .init(),
+        password: String? = nil
+    ) throws {
+        try writeFile(
+            filePath: .init(filename),
+            contents: contents,
+            metadata: metadata,
+            password: password
+        )
     }
 
     ///  Write file to zip archive
@@ -183,7 +195,12 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ///   - filePath: File path of file
     ///   - contents: Contents of file
     ///   - password: Password to encrypt file with
-    public func writeFile(filePath: FilePath, contents: [UInt8], password: String? = nil) throws {
+    public func writeFile(
+        filePath: FilePath,
+        contents: [UInt8],
+        metadata: Zip.EntryMetadata = .init(),
+        password: String? = nil
+    ) throws {
         let existingFileHeader =
             self.directory.first(where: { $0.filename == filePath })
             ?? self.newDirectoryEntries.first(where: { $0.filename == filePath })
@@ -215,16 +232,16 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
             versionNeeded: 20,
             flags: flags,
             compressionMethod: self.configuration.compression.method,
-            fileModification: .now,
+            fileModification: metadata.modificationDate,
             crc32: crc,
             compressedSize: fileSize,
             uncompressedSize: numericCast(contents.count),
             filename: filePath,
             extraFields: [],
-            comment: "",
+            comment: metadata.comment,
             diskStart: 0,
             internalAttribute: 0,
-            externalAttributes: [.unix([.isRegularFile, .permissions([.ownerReadWrite, .groupRead, .otherRead])])],
+            externalAttributes: metadata.externalAttributes,
             offsetOfLocalHeader: currentOffest
         )
         try writeLocalFileHeader(fileHeader)
@@ -363,18 +380,30 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         // Extended timestamp extra field
         let extendedTimestampExtraFieldSize = localFileHeader ? 4 + 9 : 4 + 5
         // Zip64 extra field
-        let compressedSize32 = fileHeader.compressedSize > 0xffff_ffff ? 0xffff_ffff : numericCast(fileHeader.compressedSize)
-        let uncompressedSize32 = fileHeader.uncompressedSize > 0xffff_ffff ? 0xffff_ffff : numericCast(fileHeader.uncompressedSize)
-        let offsetOfLocalHeader32 = fileHeader.offsetOfLocalHeader > 0xffff_ffff ? 0xffff_ffff : numericCast(fileHeader.offsetOfLocalHeader)
+        let compressedSize32 =
+            fileHeader.compressedSize > Int64(UInt32.max)
+            ? UInt32.max
+            : UInt32(fileHeader.compressedSize)
+        let uncompressedSize32 =
+            fileHeader.uncompressedSize > Int64(UInt32.max)
+            ? UInt32.max
+            : UInt32(fileHeader.uncompressedSize)
+        let offsetOfLocalHeader32 =
+            fileHeader.offsetOfLocalHeader > Int64(UInt32.max)
+            ? UInt32.max
+            : UInt32(fileHeader.offsetOfLocalHeader)
 
-        let includeZip64 = compressedSize32 == 0xffff_ffff || uncompressedSize32 == 0xffff_ffff || offsetOfLocalHeader32 == 0xffff_ffff
+        let includeZip64 =
+            compressedSize32 == .max
+            || uncompressedSize32 == .max
+            || offsetOfLocalHeader32 == .max
 
         var zip64ExtraFieldSize: Int
         if includeZip64 {
             zip64ExtraFieldSize = 4
-            if compressedSize32 == 0xffff_ffff { zip64ExtraFieldSize += 8 }
-            if uncompressedSize32 == 0xffff_ffff { zip64ExtraFieldSize += 8 }
-            if offsetOfLocalHeader32 == 0xffff_ffff { zip64ExtraFieldSize += 8 }
+            if compressedSize32 == .max { zip64ExtraFieldSize += 8 }
+            if uncompressedSize32 == .max { zip64ExtraFieldSize += 8 }
+            if offsetOfLocalHeader32 == .max { zip64ExtraFieldSize += 8 }
         } else {
             zip64ExtraFieldSize = 0
         }
@@ -398,13 +427,13 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         // write zip64
         if includeZip64 {
             memoryBuffer.writeIntegers(Zip.ExtraFieldHeader.zip64.rawValue, UInt16(zip64ExtraFieldSize - 4))
-            if uncompressedSize32 == 0xffff_ffff {
+            if uncompressedSize32 == .max {
                 memoryBuffer.writeInteger(fileHeader.uncompressedSize)
             }
-            if compressedSize32 == 0xffff_ffff {
+            if compressedSize32 == .max {
                 memoryBuffer.writeInteger(fileHeader.compressedSize)
             }
-            if offsetOfLocalHeader32 == 0xffff_ffff {
+            if offsetOfLocalHeader32 == .max {
                 memoryBuffer.writeInteger(fileHeader.offsetOfLocalHeader)
             }
         }

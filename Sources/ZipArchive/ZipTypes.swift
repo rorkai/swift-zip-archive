@@ -67,7 +67,7 @@ public enum Zip {
     }
 
     /// zip file header external attributes for unix files
-    public struct UnixAttributes: OptionSet {
+    public struct UnixAttributes: OptionSet, Sendable {
         public let rawValue: UInt16
 
         public init(rawValue: UInt16) {
@@ -80,13 +80,15 @@ public enum Zip {
         public static var isDirectory: Self { .init(rawValue: 0o40000) }
         /// Is a regular file
         public static var isRegularFile: Self { .init(rawValue: 0o100000) }
+        /// Is a symbolic link
+        public static var isSymbolicLink: Self { .init(rawValue: 0o120000) }
 
         /// File permissions
         public var filePermissions: FilePermissions { .init(rawValue: numericCast(rawValue) & 0o7777) }
     }
 
     /// zip file header external attributes for msdos files
-    public struct MSDOSAttributes: OptionSet {
+    public struct MSDOSAttributes: OptionSet, Sendable {
         public let rawValue: UInt32
 
         public init(rawValue: UInt32) {
@@ -98,7 +100,7 @@ public enum Zip {
     }
 
     /// zip file header external attributes
-    public struct ExternalAttributes: OptionSet {
+    public struct ExternalAttributes: OptionSet, Sendable {
         public let rawValue: UInt32
 
         public init(rawValue: UInt32) {
@@ -114,6 +116,36 @@ public enum Zip {
         public var unixAttributes: UnixAttributes { .init(rawValue: numericCast(rawValue >> 16)) }
         /// MSDOS attributes (Is it a directory)
         public var msdosAttributes: MSDOSAttributes { .init(rawValue: rawValue & 0xffff) }
+    }
+
+    /// Metadata written alongside one archive entry.
+    ///
+    /// Callers that rebuild an existing archive can preserve the original
+    /// modification date and external attributes instead of replacing file
+    /// permissions and file types with writer defaults.
+    public struct EntryMetadata: Sendable {
+        /// Entry modification date stored in DOS and extended timestamp fields.
+        public var modificationDate: Date
+
+        /// Platform attributes, including Unix file type and permissions.
+        public var externalAttributes: ExternalAttributes
+
+        /// Optional central-directory comment.
+        public var comment: String
+
+        /// Creates metadata for an archive entry.
+        public init(
+            modificationDate: Date = .now,
+            externalAttributes: ExternalAttributes = .unix([
+                .isRegularFile,
+                .permissions([.ownerReadWrite, .groupRead, .otherRead]),
+            ]),
+            comment: String = ""
+        ) {
+            self.modificationDate = modificationDate
+            self.externalAttributes = externalAttributes
+            self.comment = comment
+        }
     }
 
     public struct VersionMadeBy: RawRepresentable, Sendable, Equatable {
