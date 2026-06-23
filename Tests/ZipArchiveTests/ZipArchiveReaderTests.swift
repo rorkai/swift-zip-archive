@@ -48,6 +48,14 @@ struct ZipArchiveReaderTests {
         #expect(encoded.date == 0xff9f)
     }
 
+    @Test func invalidMSDOSCalendarDateFallsBackToEpoch() {
+        let february31 = UInt16(31 | (2 << 5) | (44 << 9))
+
+        let date = Date(msdosTime: 0, msdosDate: february31)
+
+        #expect(date == Date(timeIntervalSince1970: 0))
+    }
+
     @Test
     func loadZipDirectoryFromMemory() throws {
         let filePath = Bundle.module.fixedUpPath(forResource: "source", ofType: "zip")!

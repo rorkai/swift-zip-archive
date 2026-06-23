@@ -48,13 +48,15 @@ struct ZipArchiveWriterTests {
             .isSymbolicLink,
             .permissions([.ownerReadWrite, .groupRead, .otherRead]),
         ])
+        let comment = "symlink entry"
 
         try writer.writeFile(
             filename: "Current",
             contents: .init("Versions/A".utf8),
             metadata: .init(
                 modificationDate: modificationDate,
-                externalAttributes: externalAttributes
+                externalAttributes: externalAttributes,
+                comment: comment
             )
         )
 
@@ -64,6 +66,37 @@ struct ZipArchiveWriterTests {
         #expect(entry.fileModification == modificationDate)
         #expect(entry.externalAttributes.rawValue == externalAttributes.rawValue)
         #expect(entry.externalAttributes.unixAttributes.contains(.isSymbolicLink))
+        #expect(entry.comment == comment)
+    }
+
+    @Test
+    func testAddingFileRejectsOversizedEntryComment() {
+        let writer = ZipArchiveWriter()
+        let comment = String(repeating: "a", count: Int(UInt16.max) + 1)
+
+        #expect(throws: ZipArchiveWriterError.entryCommentTooLong) {
+            try writer.writeFile(
+                filename: "Current",
+                contents: [],
+                metadata: .init(comment: comment)
+            )
+        }
+    }
+
+    @Test
+    func testAddingFileRejectsOutOfRangeModificationDate() {
+        let writer = ZipArchiveWriter()
+        let date = Date(
+            timeIntervalSince1970: TimeInterval(Int32.max) + 1
+        )
+
+        #expect(throws: ZipArchiveWriterError.entryModificationDateOutOfRange) {
+            try writer.writeFile(
+                filename: "Current",
+                contents: [],
+                metadata: .init(modificationDate: date)
+            )
+        }
     }
 
     @Test

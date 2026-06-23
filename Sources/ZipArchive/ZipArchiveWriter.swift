@@ -205,6 +205,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         guard existingFileHeader == nil else {
             throw ZipArchiveWriterError.fileAlreadyExists
         }
+        try validate(metadata)
         try addFolder(filePath.removingRoot().removingLastComponent())
         // Calculate CRC32
         let crc = crc32(0, bytes: contents)
@@ -258,6 +259,26 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         try storage.write(bytes: compressedContents)
 
         self.newDirectoryEntries.append(fileHeader)
+    }
+
+    /// Rejects metadata that cannot be represented by the ZIP fields emitted
+    /// by this writer.
+    ///
+    /// The central directory stores comment byte counts as `UInt16`, and the
+    /// extended timestamp field stores Unix seconds as `Int32`. Validating
+    /// before writing prevents trapping conversions and partial archives.
+    private func validate(_ metadata: Zip.EntryMetadata) throws {
+        guard metadata.comment.utf8.count <= Int(UInt16.max) else {
+            throw ZipArchiveWriterError.entryCommentTooLong
+        }
+
+        let timestamp = metadata.modificationDate.timeIntervalSince1970
+        guard timestamp.isFinite,
+            timestamp >= TimeInterval(Int32.min),
+            timestamp <= TimeInterval(Int32.max)
+        else {
+            throw ZipArchiveWriterError.entryModificationDateOutOfRange
+        }
     }
 
     func addFolder(_ filePath: FilePath) throws {
@@ -569,9 +590,25 @@ extension ZipArchiveWriter {
 public struct ZipArchiveWriterError: Error, Equatable {
     internal enum Value {
         case fileAlreadyExists
+        case entryCommentTooLong
+        case entryModificationDateOutOfRange
     }
     internal let value: Value
 
     /// File being added to zip archive already exists
     public static var fileAlreadyExists: Self { .init(value: .fileAlreadyExists) }
+
+    /// The entry comment cannot be represented in a ZIP central directory.
+    ///
+    /// ZIP stores each comment's UTF-8 byte count in a 16-bit field, so comments
+    /// larger than 65,535 bytes must be rejected before serialization.
+    public static var entryCommentTooLong: Self { .init(value: .entryCommentTooLong) }
+
+    /// The entry modification date cannot be represented in the archive.
+    ///
+    /// This writer emits Unix seconds in the ZIP extended timestamp field,
+    /// whose value is limited to the signed 32-bit range.
+    public static var entryModificationDateOutOfRange: Self {
+        .init(value: .entryModificationDateOutOfRange)
+    }
 }

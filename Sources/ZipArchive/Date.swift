@@ -22,9 +22,7 @@ extension Date {
         let month = Int((msdosDate & 0x1e0) >> 5)
         let year = Int(((msdosDate & 0xfe00) >> 9) + 1980)
 
-        #if os(WASI)
-        guard (1...12).contains(month),
-            (1...31).contains(day),
+        guard isValidGregorianDate(year: year, month: month, day: day),
             (0...23).contains(hour),
             (0...59).contains(minute),
             (0...59).contains(second)
@@ -32,6 +30,8 @@ extension Date {
             self = .init(timeIntervalSince1970: 0)
             return
         }
+
+        #if os(WASI)
         let days = daysSinceUnixEpoch(year: year, month: month, day: day)
         self = .init(
             timeIntervalSince1970: TimeInterval(
@@ -92,6 +92,33 @@ extension Date {
         time: 0xbf7d,
         date: 0xff9f
     )
+}
+
+/// Validates the calendar portion of a DOS timestamp before conversion.
+///
+/// DOS fields can encode impossible dates such as February 31. Foundation may
+/// normalize those components instead of rejecting them, while the WASI path
+/// performs arithmetic directly, so both paths validate the same invariant.
+private func isValidGregorianDate(
+    year: Int,
+    month: Int,
+    day: Int
+) -> Bool {
+    let daysInMonth: Int
+    switch month {
+    case 1, 3, 5, 7, 8, 10, 12:
+        daysInMonth = 31
+    case 4, 6, 9, 11:
+        daysInMonth = 30
+    case 2:
+        let isLeapYear =
+            year.isMultiple(of: 4)
+            && (!year.isMultiple(of: 100) || year.isMultiple(of: 400))
+        daysInMonth = isLeapYear ? 29 : 28
+    default:
+        return false
+    }
+    return (1...daysInMonth).contains(day)
 }
 
 #if os(WASI)
