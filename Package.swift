@@ -1,4 +1,4 @@
-// swift-tools-version: 6.1
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import Foundation
@@ -11,9 +11,15 @@ var defaultSwiftSettings: [SwiftSetting] = [
     // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0409-access-level-on-imports.md
     .enableUpcomingFeature("InternalImportsByDefault"),
 
-    // https://github.com/swiftlang/swift-evolution/blob/main/proposals/0444-member-import-visibility.md
-    .enableUpcomingFeature("MemberImportVisibility"),
 ]
+
+#if compiler(>=6.1)
+// Member import visibility strengthens diagnostics when the active compiler
+// supports SE-0444 without raising the package's minimum Swift version.
+defaultSwiftSettings.append(
+    .enableUpcomingFeature("MemberImportVisibility")
+)
+#endif
 
 let package = Package(
     name: "swift-zip-archive",

@@ -13,6 +13,14 @@ import Testing
 @testable import ZipArchive
 
 struct ZipArchiveReaderTests {
+    @Test func crc32MatchesTheStandardCheckValue() {
+        let bytes = Array("123456789".utf8)
+
+        let checksum = crc32(0, bytes: bytes)
+
+        #expect(checksum == 0xcbf4_3926)
+    }
+
     @Test func testMSDOSDateAndBack() throws {
         let msdosDate = 3 | (6 << 5) | (24 << 9)
         let msdosTime = 21 | (45 << 5) | (19 << 11)
@@ -20,6 +28,32 @@ struct ZipArchiveReaderTests {
         let (msdosTime2, msdosDate2) = date.msdosDate()
         #expect(msdosTime == msdosTime2)
         #expect(msdosDate == msdosDate2)
+    }
+
+    @Test func msdosDateClampsDatesBeforeTheArchiveEpoch() {
+        let date = Date(timeIntervalSince1970: 0)
+
+        let encoded = date.msdosDate()
+
+        #expect(encoded.time == 0)
+        #expect(encoded.date == 0x0021)
+    }
+
+    @Test func msdosDateClampsDatesAfterTheRepresentableRange() {
+        let date = Date(timeIntervalSince1970: 4_354_819_200)
+
+        let encoded = date.msdosDate()
+
+        #expect(encoded.time == 0xbf7d)
+        #expect(encoded.date == 0xff9f)
+    }
+
+    @Test func invalidMSDOSCalendarDateFallsBackToEpoch() {
+        let february31 = UInt16(31 | (2 << 5) | (44 << 9))
+
+        let date = Date(msdosTime: 0, msdosDate: february31)
+
+        #expect(date == Date(timeIntervalSince1970: 0))
     }
 
     @Test
