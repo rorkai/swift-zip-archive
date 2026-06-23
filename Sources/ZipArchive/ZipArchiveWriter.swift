@@ -135,7 +135,6 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     /// - Parameters:
     ///   - filename: Filename of file
     ///   - contents: Contents of file
-    ///   - metadata: Modification date and external file attributes to store.
     ///   - password: Password to encrypt file with
     public func writeFile(filename: String, sourceFile: String, password: String? = nil) throws {
         try writeFile(filePath: .init(filename), sourceFilePath: .init(sourceFile), password: password)
@@ -148,7 +147,6 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     /// - Parameters:
     ///   - filePath: File path of file
     ///   - contents: Contents of file
-    ///   - metadata: Modification date and external file attributes to store.
     ///   - password: Password to encrypt file with
     public func writeFile(filePath: FilePath, sourceFilePath: FilePath, password: String? = nil) throws {
         let fileDescriptor = try FileDescriptor.open(
