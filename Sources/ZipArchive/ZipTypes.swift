@@ -161,6 +161,12 @@ public enum Zip {
             }
             static var msdos: Self { .init(rawValue: 0) }
             static var unix: Self { .init(rawValue: 0x3) }
+            /// OS X (Darwin), whose external attributes use Unix mode bits.
+            static var darwin: Self { .init(rawValue: 0x13) }
+
+            var usesUnixFileAttributes: Bool {
+                self == .unix || self == .darwin
+            }
         }
         public init(system: System, version: UInt8) {
             self.init(rawValue: numericCast(system.rawValue) << 8 | numericCast(version))
@@ -180,7 +186,17 @@ public enum Zip {
         public var crc32: UInt32
         var compressedSize: Int64
         public var uncompressedSize: Int64
-        public var filename: FilePath
+        /// Entry path exactly as encoded in the ZIP header.
+        var pathInArchive: String
+        /// Platform-native path for the archive entry.
+        ///
+        /// Use ``isDirectory`` to distinguish directory entries because
+        /// `FilePath` does not preserve trailing separators.
+        public var filename: FilePath {
+            didSet {
+                pathInArchive = filename.zipArchivePath
+            }
+        }
         var extraFields: [ExtraField]
         public var comment: String
         var diskStart: UInt32
@@ -188,10 +204,19 @@ public enum Zip {
         public var externalAttributes: ExternalAttributes
         var offsetOfLocalHeader: Int64
 
+        /// Whether the entry represents a directory.
         public var isDirectory: Bool {
-            versionMadeBy.system == .unix
+            versionMadeBy.system.usesUnixFileAttributes
                 ? self.externalAttributes.unixAttributes.contains(.isDirectory)
                 : self.externalAttributes.msdosAttributes.contains(.isDirectory)
+        }
+
+        /// Whether the entry stores a Unix symbolic link.
+        public var isSymbolicLink: Bool {
+            versionMadeBy.system.usesUnixFileAttributes
+                && self.externalAttributes.unixAttributes.contains(
+                    .isSymbolicLink
+                )
         }
     }
 
@@ -238,6 +263,7 @@ public enum Zip {
         var crc32: UInt32
         var compressedSize: Int64
         var uncompressedSize: Int64
+        var pathInArchive: String
         var filename: FilePath
         var extraFields: [ExtraField]
     }
@@ -275,4 +301,15 @@ public enum Zip {
     static let zip64EndOfCentralDirectorySignature: UInt32 = 0x0606_4b50
     static let zip64EndOfCentralLocatorSignature: UInt32 = 0x0706_4b50
     static let endOfCentralDirectorySignature: UInt32 = 0x0605_4b50
+}
+
+extension FilePath {
+    /// Converts a native path to the portable separator syntax required by ZIP.
+    var zipArchivePath: String {
+        #if os(Windows)
+        String(string.map { $0 == "\\" ? "/" : $0 })
+        #else
+        string
+        #endif
+    }
 }
