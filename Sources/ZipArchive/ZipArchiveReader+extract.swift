@@ -66,6 +66,9 @@ public struct ZipArchiveExtractionOptions: Sendable {
     public var bufferSize: Int
 
     /// Symbolic-link behavior used during extraction.
+    ///
+    /// The default preserves historical behavior by materializing the stored
+    /// link target as regular file contents.
     public var symbolicLinkPolicy: SymbolicLinkPolicy
 
     /// Resource limits applied to the archive.
@@ -75,11 +78,12 @@ public struct ZipArchiveExtractionOptions: Sendable {
     ///
     /// - Parameters:
     ///   - bufferSize: Maximum compressed or decompressed chunk size.
-    ///   - symbolicLinkPolicy: How symbolic-link entries are handled.
+    ///   - symbolicLinkPolicy: How symbolic-link entries are handled. The
+    ///     default materializes their stored targets as regular files.
     ///   - limits: Resource limits applied before and during extraction.
     public init(
         bufferSize: Int = Self.defaultBufferSize,
-        symbolicLinkPolicy: SymbolicLinkPolicy = .reject,
+        symbolicLinkPolicy: SymbolicLinkPolicy = .materializeAsFile,
         limits: Limits = .init()
     ) {
         self.bufferSize = bufferSize
@@ -89,7 +93,7 @@ public struct ZipArchiveExtractionOptions: Sendable {
 }
 
 extension ZipArchiveReader {
-    /// Extracts the archive using secure default policies.
+    /// Extracts the archive using compatibility-preserving default policies.
     ///
     /// - Parameters:
     ///   - rootFolder: Existing directory that receives the archive contents.
@@ -111,8 +115,9 @@ extension ZipArchiveReader {
     ///
     /// Every archive path and configured resource limit is validated before
     /// the first entry is written. Extraction rejects path traversal,
-    /// duplicate destinations, file-directory conflicts, and symbolic links
-    /// by default. Existing destination files are never overwritten.
+    /// duplicate destinations, and file-directory conflicts. Symbolic-link
+    /// targets are materialized as regular files by default, and existing
+    /// destination files are never overwritten.
     ///
     /// - Parameters:
     ///   - rootFolder: Existing directory that receives the archive contents.

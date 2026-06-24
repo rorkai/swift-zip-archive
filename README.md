@@ -33,8 +33,8 @@ Custom compression methods can support incremental reads by conforming to
 ## Extracting Zip Archives
 
 `extract(to:password:options:)` validates every archive path before writing,
-streams file contents, rejects symbolic links by default, and does not
-overwrite existing destination files:
+streams file contents, materializes symbolic-link targets as regular files by
+default, and does not overwrite existing destination files:
 
 ```swift
 try reader.extract(
@@ -49,8 +49,8 @@ try reader.extract(
 )
 ```
 
-Use `.materializeAsFile` only when compatibility requires preserving a
-symbolic-link entry's stored target as regular file contents.
+Use `.reject` to reject archives containing symbolic-link entries before
+writing any archive contents.
 
 ## Writing Zip Archives
 

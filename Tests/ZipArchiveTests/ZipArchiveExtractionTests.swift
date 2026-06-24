@@ -255,7 +255,7 @@ struct ZipArchiveExtractionTests {
     }
 
     @Test
-    func rejectsSymbolicLinksByDefault() throws {
+    func rejectsSymbolicLinksWhenRequested() throws {
         let destination = FilePath("Extraction-\(UUID().uuidString)")
         try DirectoryDescriptor.mkdir(
             destination,
@@ -280,7 +280,10 @@ struct ZipArchiveExtractionTests {
         let reader = try ZipArchiveReader(buffer: writer.finalizeBuffer())
 
         #expect(throws: ZipArchiveReaderError.symbolicLinkNotAllowed) {
-            try reader.extract(to: destination)
+            try reader.extract(
+                to: destination,
+                options: .init(symbolicLinkPolicy: .reject)
+            )
         }
         #expect(
             !FileManager.default.fileExists(
@@ -290,7 +293,7 @@ struct ZipArchiveExtractionTests {
     }
 
     @Test
-    func rejectsDarwinSymbolicLinksByDefault() throws {
+    func rejectsDarwinSymbolicLinksWhenRequested() throws {
         let destination = FilePath("Extraction-\(UUID().uuidString)")
         try DirectoryDescriptor.mkdir(
             destination,
@@ -326,12 +329,15 @@ struct ZipArchiveExtractionTests {
         let reader = try ZipArchiveReader(buffer: archive)
 
         #expect(throws: ZipArchiveReaderError.symbolicLinkNotAllowed) {
-            try reader.extract(to: destination)
+            try reader.extract(
+                to: destination,
+                options: .init(symbolicLinkPolicy: .reject)
+            )
         }
     }
 
     @Test
-    func materializesSymbolicLinksWhenRequested() throws {
+    func materializesSymbolicLinksByDefault() throws {
         let destination = FilePath("Extraction-\(UUID().uuidString)")
         try DirectoryDescriptor.mkdir(
             destination,
@@ -355,10 +361,7 @@ struct ZipArchiveExtractionTests {
         )
         let reader = try ZipArchiveReader(buffer: writer.finalizeBuffer())
 
-        try reader.extract(
-            to: destination,
-            options: .init(symbolicLinkPolicy: .materializeAsFile)
-        )
+        try reader.extract(to: destination)
 
         let contents = try Data(
             contentsOf: URL(
