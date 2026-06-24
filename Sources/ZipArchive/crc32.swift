@@ -83,7 +83,7 @@ internal func crc32(
     }
     return CRC32(
         cziparchive_z_crc32_z(
-            UInt(crc),
+            cziparchive_z_uLong(crc),
             baseAddress,
             numericCast(buffer.count)
         )
