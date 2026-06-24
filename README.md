@@ -72,7 +72,7 @@ If you want to create a new zip archive you can call `withFile("MyFile.zip", opt
 try reader.readFile(fileHeader, password: "testing123")
 ```
 
-And you can add encryption to a file by adding a password to `ZipArchiveWriter.writeFile(filename:contents:password:)`. For example
+And you can add encryption to a file by adding a password to `ZipArchiveWriter.writeFile(filename:contents:metadata:password:)`. For example
 
 ```swift
 try writer.writeFile(filename: "Hello.txt", contents: fileContents, password: "testing123")
