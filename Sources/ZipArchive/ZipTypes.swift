@@ -193,6 +193,14 @@ public enum Zip {
                 ? self.externalAttributes.unixAttributes.contains(.isDirectory)
                 : self.externalAttributes.msdosAttributes.contains(.isDirectory)
         }
+
+        /// Whether the entry stores a Unix symbolic link.
+        public var isSymbolicLink: Bool {
+            versionMadeBy.system == .unix
+                && self.externalAttributes.unixAttributes.contains(
+                    .isSymbolicLink
+                )
+        }
     }
 
     /// File header extra field

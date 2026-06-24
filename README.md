@@ -18,6 +18,40 @@ let fileContents = try ZipArchiveReader.withFile("MyFile.zip") { reader in
 }
 ```
 
+Large entries can be read incrementally so their complete compressed and
+decompressed contents are never held in memory at once:
+
+```swift
+try reader.readFile(fileHeader, bufferSize: 64 * 1024) { chunk in
+    try output.writeAll(chunk)
+}
+```
+
+Custom compression methods can support incremental reads by conforming to
+`ZipStreamingCompression`.
+
+## Extracting Zip Archives
+
+`extract(to:password:options:)` validates every archive path before writing,
+streams file contents, rejects symbolic links by default, and does not
+overwrite existing destination files:
+
+```swift
+try reader.extract(
+    to: destination,
+    options: .init(
+        limits: .init(
+            maximumEntryCount: 10_000,
+            maximumUncompressedSizePerEntry: 512 * 1024 * 1024,
+            maximumTotalUncompressedSize: 2 * 1024 * 1024 * 1024
+        )
+    )
+)
+```
+
+Use `.materializeAsFile` only when compatibility requires preserving a
+symbolic-link entry's stored target as regular file contents.
+
 ## Writing Zip Archives
 
 The ``ZipArchiveWriter`` is used to write zip archives. You can use `ZipArchiveWriter.withFile(_:options:process:)` to either create a new zip archive or append files to an existing zip archive. This function has a closure parameter in which you can add new files to the zip using the provided `ZipArchiveWriter`. When you exit the closure the zip archive is finalized ie the directory and end of directory sections are written to disk and file descriptor is closed. The following loads zip archive MyFile.zip and then appends a new file called Hello.txt to the archive.

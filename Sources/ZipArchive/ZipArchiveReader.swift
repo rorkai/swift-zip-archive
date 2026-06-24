@@ -92,17 +92,17 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
     ///   - password: Password used to decrypt file
     /// - Returns: Buffer containing file
     public func readFile(_ file: Zip.FileHeader, password: String? = nil) throws -> [UInt8] {
-        precondition(self.parsingDirectory == false, "Cannot read file while parsing the directory")
-        try self.storage.seek(numericCast(file.offsetOfLocalHeader))
-        let localFileHeader = try readLocalFileHeader()
-        guard localFileHeader.filename == file.filename else { throw ZipArchiveReaderError.invalidFileHeader }
-        guard let compressor = self.compressionMethods[localFileHeader.compressionMethod] else {
+        let preparedEntry = try prepareEntryForReading(file)
+        guard let compressor = self.compressionMethods[preparedEntry.localHeader.compressionMethod] else {
             throw ZipArchiveReaderError.unsupportedCompressionMethod
         }
         var encryptionKeys: [UInt8]?
-        var fileSize = file.flags.contains(.dataDescriptor) ? file.compressedSize : localFileHeader.compressedSize
+        var fileSize = preparedEntry.compressedSize
         // if encrypted read encryption header
-        if localFileHeader.flags.contains(.encrypted) {
+        if preparedEntry.localHeader.flags.contains(.encrypted) {
+            guard fileSize >= 12 else {
+                throw ZipArchiveReaderError.invalidFileHeader
+            }
             encryptionKeys = try self.storage.readBytes(length: 12)
             fileSize -= 12
         } else {
@@ -110,7 +110,17 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
         }
 
         // Read bytes and uncompress
-        var fileBytes = try self.storage.readBytes(length: numericCast(fileSize))
+        guard
+            let compressedByteCount = Int(exactly: fileSize),
+            let uncompressedByteCount = Int(
+                exactly: preparedEntry.uncompressedSize
+            )
+        else {
+            throw ZipArchiveReaderError.entryTooLargeForBufferedRead
+        }
+        var fileBytes = try self.storage.readBytes(
+            length: compressedByteCount
+        )
 
         // if we have a password and encryption keys
         if let password, var encryptionKeys {
@@ -120,14 +130,155 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
         } else if encryptionKeys != nil {
             throw ZipArchiveReaderError.encryptedFilesRequirePassword
         }
-        let uncompressedSize = file.flags.contains(.dataDescriptor) ? file.uncompressedSize : localFileHeader.uncompressedSize
-        let uncompressedBytes = try compressor.inflate(from: fileBytes, uncompressedSize: numericCast(uncompressedSize))
+        let uncompressedBytes = try compressor.inflate(
+            from: fileBytes,
+            uncompressedSize: uncompressedByteCount
+        )
         // Verify CRC32
         let crc = crc32(0, bytes: uncompressedBytes)
-        guard crc == (file.flags.contains(.dataDescriptor) ? file.crc32 : localFileHeader.crc32) else {
+        guard crc == preparedEntry.expectedChecksum else {
             throw ZipArchiveReaderError.crc32FileValidationFailed
         }
         return uncompressedBytes
+    }
+
+    /// Reads a file incrementally without buffering the complete entry.
+    ///
+    /// The configured compression method must conform to
+    /// ``ZipStreamingCompression``. The callback is invoked synchronously and
+    /// receives chunks no larger than `bufferSize`.
+    ///
+    /// - Parameters:
+    ///   - file: File header returned by ``readDirectory()``.
+    ///   - password: Password used to decrypt the entry, when required.
+    ///   - bufferSize: Maximum compressed or decompressed chunk size.
+    ///   - onChunk: Callback that consumes one decompressed chunk.
+    /// - Throws: ``ZipArchiveReaderError`` when the entry is malformed, its
+    ///   compression method does not support streaming, or validation fails.
+    public func readFile(
+        _ file: Zip.FileHeader,
+        password: String? = nil,
+        bufferSize: Int,
+        onChunk: (_ bytes: [UInt8]) throws -> Void
+    ) throws {
+        guard bufferSize > 0,
+            UInt64(bufferSize) <= UInt64(UInt32.max)
+        else {
+            throw ZipArchiveReaderError.invalidBufferSize
+        }
+        let preparedEntry = try prepareEntryForReading(file)
+        guard
+            let compression = self.compressionMethods[
+                preparedEntry.localHeader.compressionMethod
+            ] as? any ZipStreamingCompression
+        else {
+            throw ZipArchiveReaderError.streamingUnsupportedCompressionMethod
+        }
+
+        var compressedSize = preparedEntry.compressedSize
+
+        var cryptKey: CryptKey?
+        if preparedEntry.localHeader.flags.contains(.encrypted) {
+            guard let password, compressedSize >= 12 else {
+                throw ZipArchiveReaderError.encryptedFilesRequirePassword
+            }
+            var key = CryptKey(password: password)
+            var encryptionHeader = try self.storage.readBytes(length: 12)
+            key.decryptBytes(&encryptionHeader)
+            cryptKey = key
+            compressedSize -= 12
+        }
+
+        var remainingCompressedSize = compressedSize
+        var decompressedSize: Int64 = 0
+        var checksum: UInt32 = 0
+        try compression.inflate(
+            bufferSize: bufferSize,
+            read: { maximumByteCount in
+                guard maximumByteCount > 0 else {
+                    throw ZipArchiveReaderError.invalidBufferSize
+                }
+                guard remainingCompressedSize > 0 else {
+                    return []
+                }
+                let requestedByteCount = min(maximumByteCount, bufferSize)
+                let byteCount =
+                    remainingCompressedSize < Int64(requestedByteCount)
+                    ? Int(remainingCompressedSize)
+                    : requestedByteCount
+                var bytes = try self.storage.readBytes(length: byteCount)
+                if var key = cryptKey {
+                    key.decryptBytes(&bytes)
+                    cryptKey = key
+                }
+                remainingCompressedSize -= Int64(byteCount)
+                return bytes
+            },
+            write: { bytes in
+                guard bytes.count <= bufferSize else {
+                    throw ZipArchiveReaderError
+                        .streamingChunkExceedsBufferSize
+                }
+                let (newSize, overflowed) =
+                    decompressedSize
+                    .addingReportingOverflow(Int64(bytes.count))
+                guard
+                    !overflowed,
+                    newSize <= preparedEntry.uncompressedSize
+                else {
+                    throw ZipArchiveReaderError.uncompressedSizeMismatch
+                }
+                decompressedSize = newSize
+                checksum = crc32(checksum, bytes: bytes)
+                try onChunk(bytes)
+            }
+        )
+
+        guard remainingCompressedSize == 0,
+            decompressedSize == preparedEntry.uncompressedSize
+        else {
+            throw ZipArchiveReaderError.uncompressedSizeMismatch
+        }
+        guard checksum == preparedEntry.expectedChecksum else {
+            throw ZipArchiveReaderError.crc32FileValidationFailed
+        }
+    }
+
+    /// Reads and reconciles the local and central-directory metadata before
+    /// either buffered or streaming decompression starts.
+    private func prepareEntryForReading(
+        _ file: Zip.FileHeader
+    ) throws -> PreparedZipEntry {
+        precondition(
+            self.parsingDirectory == false,
+            "Cannot read file while parsing the directory"
+        )
+        try self.storage.seek(numericCast(file.offsetOfLocalHeader))
+        let localHeader = try readLocalFileHeader()
+        guard localHeader.filename == file.filename,
+            localHeader.flags == file.flags,
+            localHeader.compressionMethod == file.compressionMethod
+        else {
+            throw ZipArchiveReaderError.invalidFileHeader
+        }
+        if !file.flags.contains(.dataDescriptor) {
+            guard localHeader.compressedSize == file.compressedSize,
+                localHeader.uncompressedSize == file.uncompressedSize,
+                localHeader.crc32 == file.crc32
+            else {
+                throw ZipArchiveReaderError.invalidFileHeader
+            }
+        }
+        guard file.compressedSize >= 0, file.uncompressedSize >= 0 else {
+            throw ZipArchiveReaderError.invalidFileHeader
+        }
+
+        return PreparedZipEntry(
+            localHeader: localHeader,
+            compressedSize: file.compressedSize,
+            uncompressedSize: file.uncompressedSize,
+            expectedChecksum: file.crc32
+        )
     }
 
     /// Read directory from byffer
@@ -468,6 +619,13 @@ extension ZipArchiveReader where Storage == ZipFileStorage {
     }
 }
 
+private struct PreparedZipEntry {
+    let localHeader: Zip.LocalFileHeader
+    let compressedSize: Int64
+    let uncompressedSize: Int64
+    let expectedChecksum: UInt32
+}
+
 /// Errors received while reading zip archive
 public struct ZipArchiveReaderError: Error, Equatable {
     internal enum Value {
@@ -480,6 +638,20 @@ public struct ZipArchiveReaderError: Error, Equatable {
         case failedToReadFromBuffer
         case crc32FileValidationFailed
         case encryptedFilesRequirePassword
+        case invalidBufferSize
+        case streamingUnsupportedCompressionMethod
+        case streamingChunkExceedsBufferSize
+        case entryTooLargeForBufferedRead
+        case uncompressedSizeMismatch
+        case unsafeExtractionPath
+        case duplicateExtractionPath
+        case symbolicLinkNotAllowed
+        case invalidExtractionOptions
+        case entryCountLimitExceeded
+        case entryUncompressedSizeLimitExceeded
+        case totalUncompressedSizeLimitExceeded
+        case unsafeDestinationPath
+        case conflictingExtractionPath
     }
     internal let value: Value
 
@@ -500,4 +672,58 @@ public struct ZipArchiveReaderError: Error, Equatable {
     public static var crc32FileValidationFailed: Self { .init(value: .crc32FileValidationFailed) }
     /// File is encrypted and requires a password
     public static var encryptedFilesRequirePassword: Self { .init(value: .encryptedFilesRequirePassword) }
+    /// Streaming reads require a positive buffer that zlib can represent.
+    public static var invalidBufferSize: Self { .init(value: .invalidBufferSize) }
+    /// The configured compression method does not support incremental reads.
+    public static var streamingUnsupportedCompressionMethod: Self {
+        .init(value: .streamingUnsupportedCompressionMethod)
+    }
+    /// A streaming compression callback produced a chunk larger than requested.
+    public static var streamingChunkExceedsBufferSize: Self {
+        .init(value: .streamingChunkExceedsBufferSize)
+    }
+    /// The entry cannot fit in memory on this platform; use streaming instead.
+    public static var entryTooLargeForBufferedRead: Self {
+        .init(value: .entryTooLargeForBufferedRead)
+    }
+    /// Decompressed bytes did not match the size declared by the archive.
+    public static var uncompressedSizeMismatch: Self {
+        .init(value: .uncompressedSizeMismatch)
+    }
+    /// An archive entry would escape or ambiguously address the destination.
+    public static var unsafeExtractionPath: Self {
+        .init(value: .unsafeExtractionPath)
+    }
+    /// Multiple archive entries resolve to the same destination path.
+    public static var duplicateExtractionPath: Self {
+        .init(value: .duplicateExtractionPath)
+    }
+    /// Extraction rejected a symbolic-link entry.
+    public static var symbolicLinkNotAllowed: Self {
+        .init(value: .symbolicLinkNotAllowed)
+    }
+    /// Extraction options contain an invalid buffer or negative limit.
+    public static var invalidExtractionOptions: Self {
+        .init(value: .invalidExtractionOptions)
+    }
+    /// The archive contains more entries than the configured limit.
+    public static var entryCountLimitExceeded: Self {
+        .init(value: .entryCountLimitExceeded)
+    }
+    /// An entry expands beyond the configured per-entry limit.
+    public static var entryUncompressedSizeLimitExceeded: Self {
+        .init(value: .entryUncompressedSizeLimitExceeded)
+    }
+    /// The archive expands beyond the configured aggregate limit.
+    public static var totalUncompressedSizeLimitExceeded: Self {
+        .init(value: .totalUncompressedSizeLimitExceeded)
+    }
+    /// A destination component is not a real directory beneath the root.
+    public static var unsafeDestinationPath: Self {
+        .init(value: .unsafeDestinationPath)
+    }
+    /// A file entry is also used as another entry's parent directory.
+    public static var conflictingExtractionPath: Self {
+        .init(value: .conflictingExtractionPath)
+    }
 }

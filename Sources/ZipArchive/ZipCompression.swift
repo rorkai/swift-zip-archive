@@ -16,6 +16,26 @@ public protocol ZipCompression {
     func deflate(from: [UInt8]) throws -> [UInt8]
 }
 
+/// A compression method that can decompress input incrementally.
+///
+/// Streaming readers use this protocol instead of buffering a complete
+/// compressed entry and its decompressed contents in memory.
+public protocol ZipStreamingCompression: ZipCompression {
+    /// Decompresses bytes supplied by `read` and forwards bounded chunks to
+    /// `write`.
+    ///
+    /// - Parameters:
+    ///   - bufferSize: Maximum number of bytes requested or emitted at once.
+    ///   - read: Returns up to the requested number of compressed bytes, or an
+    ///     empty array at the end of the entry.
+    ///   - write: Receives one decompressed chunk synchronously.
+    func inflate(
+        bufferSize: Int,
+        read: (_ maximumByteCount: Int) throws -> [UInt8],
+        write: (_ bytes: [UInt8]) throws -> Void
+    ) throws
+}
+
 extension ZipCompression where Self == NoZipCompression {
     /// No compression
     public static var noCompression: Self { .init() }
@@ -28,7 +48,7 @@ extension ZipCompression where Self == ZlibDeflateCompression {
 
 typealias ZipCompressionMethodsMap = [Zip.FileCompressionMethod: any ZipCompression]
 
-public struct NoZipCompression: ZipCompression {
+public struct NoZipCompression: ZipStreamingCompression {
     public var method: Zip.FileCompressionMethod { .noCompression }
 
     public func inflate(from: [UInt8], uncompressedSize: Int) throws -> [UInt8] {
@@ -37,10 +57,36 @@ public struct NoZipCompression: ZipCompression {
     public func deflate(from: [UInt8]) throws -> [UInt8] {
         from
     }
+
+    /// Copies stored bytes from `read` to `write` in bounded chunks.
+    ///
+    /// - Parameters:
+    ///   - bufferSize: Maximum number of bytes requested from `read`.
+    ///   - read: Returns up to the requested number of stored bytes.
+    ///   - write: Receives each stored chunk synchronously.
+    public func inflate(
+        bufferSize: Int,
+        read: (_ maximumByteCount: Int) throws -> [UInt8],
+        write: (_ bytes: [UInt8]) throws -> Void
+    ) throws {
+        guard bufferSize > 0 else {
+            throw ZipArchiveReaderError.invalidBufferSize
+        }
+        while true {
+            let bytes = try read(bufferSize)
+            guard !bytes.isEmpty else {
+                return
+            }
+            guard bytes.count <= bufferSize else {
+                throw ZipArchiveReaderError.streamingChunkExceedsBufferSize
+            }
+            try write(bytes)
+        }
+    }
 }
 
 /// Zip zlib deflate compression method
-public class ZlibDeflateCompression: ZipCompression {
+public class ZlibDeflateCompression: ZipStreamingCompression {
     public var method: Zip.FileCompressionMethod { .deflate }
 
     let windowBits: Int32 = 15
@@ -96,6 +142,99 @@ public class ZlibDeflateCompression: ZipCompression {
             break
         }
         return buffer
+    }
+
+    /// Incrementally inflates raw DEFLATE data.
+    ///
+    /// - Parameters:
+    ///   - bufferSize: Maximum number of compressed bytes requested or
+    ///     decompressed bytes emitted at once.
+    ///   - read: Returns up to the requested number of compressed bytes.
+    ///   - write: Receives each decompressed chunk synchronously.
+    public func inflate(
+        bufferSize: Int,
+        read: (_ maximumByteCount: Int) throws -> [UInt8],
+        write: (_ bytes: [UInt8]) throws -> Void
+    ) throws {
+        guard bufferSize > 0,
+            UInt64(bufferSize) <= UInt64(UInt32.max)
+        else {
+            throw ZipArchiveReaderError.invalidBufferSize
+        }
+
+        var stream = cziparchive_z_stream()
+        stream.zalloc = nil
+        stream.zfree = nil
+        stream.opaque = nil
+        guard
+            CZipArchiveZlib_inflateInit2(&stream, -windowBits)
+                == CZIPARCHIVE_Z_OK
+        else {
+            throw ZipArchiveReaderError.compressionError
+        }
+        defer {
+            _ = cziparchive_z_inflateEnd(&stream)
+        }
+
+        var reachedEnd = false
+        while !reachedEnd {
+            var input = try read(bufferSize)
+            guard !input.isEmpty else {
+                break
+            }
+            guard input.count <= bufferSize else {
+                throw ZipArchiveReaderError.streamingChunkExceedsBufferSize
+            }
+
+            try input.withUnsafeMutableBytes { inputBuffer in
+                stream.avail_in = UInt32(inputBuffer.count)
+                stream.next_in = CZipArchiveZlib_voidPtr_to_BytefPtr(
+                    inputBuffer.baseAddress!
+                )
+
+                repeat {
+                    var output = [UInt8](repeating: 0, count: bufferSize)
+                    let status = output.withUnsafeMutableBytes {
+                        outputBuffer -> CInt in
+                        stream.avail_out = UInt32(outputBuffer.count)
+                        stream.next_out =
+                            CZipArchiveZlib_voidPtr_to_BytefPtr(
+                                outputBuffer.baseAddress!
+                            )
+                        return cziparchive_z_inflate(
+                            &stream,
+                            CZIPARCHIVE_Z_NO_FLUSH
+                        )
+                    }
+                    let outputCount = bufferSize - Int(stream.avail_out)
+                    if outputCount > 0 {
+                        output.removeLast(output.count - outputCount)
+                        try write(output)
+                    }
+
+                    switch status {
+                    case CZIPARCHIVE_Z_STREAM_END:
+                        reachedEnd = true
+                    case CZIPARCHIVE_Z_OK:
+                        break
+                    case CZIPARCHIVE_Z_BUF_ERROR
+                    where outputCount == 0 && stream.avail_in == 0:
+                        break
+                    default:
+                        throw ZipArchiveReaderError.compressionError
+                    }
+
+                    if status == CZIPARCHIVE_Z_BUF_ERROR {
+                        break
+                    }
+                } while !reachedEnd
+                    && (stream.avail_in > 0 || stream.avail_out == 0)
+            }
+        }
+
+        guard reachedEnd else {
+            throw ZipArchiveReaderError.compressionError
+        }
     }
 
     public func deflate(from: [UInt8]) throws -> [UInt8] {
