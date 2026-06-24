@@ -214,6 +214,9 @@ public class ZlibDeflateCompression: ZipStreamingCompression {
 
                     switch status {
                     case CZIPARCHIVE_Z_STREAM_END:
+                        guard stream.avail_in == 0 else {
+                            throw ZipArchiveReaderError.compressionError
+                        }
                         reachedEnd = true
                     case CZIPARCHIVE_Z_OK:
                         break

@@ -137,7 +137,12 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ///   - contents: Contents of file
     ///   - password: Password to encrypt file with
     public func writeFile(filename: String, sourceFile: String, password: String? = nil) throws {
-        try writeFile(filePath: .init(filename), sourceFilePath: .init(sourceFile), password: password)
+        try writeFile(
+            filePath: .init(filename),
+            pathInArchive: filename,
+            sourceFilePath: .init(sourceFile),
+            password: password
+        )
     }
 
     ///  Write file to zip archive
@@ -149,6 +154,20 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ///   - contents: Contents of file
     ///   - password: Password to encrypt file with
     public func writeFile(filePath: FilePath, sourceFilePath: FilePath, password: String? = nil) throws {
+        try writeFile(
+            filePath: filePath,
+            pathInArchive: filePath.zipArchivePath,
+            sourceFilePath: sourceFilePath,
+            password: password
+        )
+    }
+
+    private func writeFile(
+        filePath: FilePath,
+        pathInArchive: String,
+        sourceFilePath: FilePath,
+        password: String?
+    ) throws {
         let fileDescriptor = try FileDescriptor.open(
             sourceFilePath,
             .readOnly
@@ -160,7 +179,12 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
                 initializedCount = try fileDescriptor.read(fromAbsoluteOffset: 0, into: .init(buffer))
             }
         }
-        try writeFile(filePath: filePath, contents: contents, password: password)
+        try writeFile(
+            filePath: filePath,
+            pathInArchive: pathInArchive,
+            contents: contents,
+            password: password
+        )
     }
 
     ///  Write file to zip archive
@@ -179,6 +203,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ) throws {
         try writeFile(
             filePath: .init(filename),
+            pathInArchive: filename,
             contents: contents,
             metadata: metadata,
             password: password
@@ -195,6 +220,22 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     ///   - password: Password to encrypt file with
     public func writeFile(
         filePath: FilePath,
+        contents: [UInt8],
+        metadata: Zip.EntryMetadata = .init(),
+        password: String? = nil
+    ) throws {
+        try writeFile(
+            filePath: filePath,
+            pathInArchive: filePath.zipArchivePath,
+            contents: contents,
+            metadata: metadata,
+            password: password
+        )
+    }
+
+    private func writeFile(
+        filePath: FilePath,
+        pathInArchive: String,
         contents: [UInt8],
         metadata: Zip.EntryMetadata = .init(),
         password: String? = nil
@@ -235,6 +276,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
             crc32: crc,
             compressedSize: fileSize,
             uncompressedSize: numericCast(contents.count),
+            pathInArchive: pathInArchive,
             filename: filePath,
             extraFields: [],
             comment: metadata.comment,
@@ -304,6 +346,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
             crc32: 0,
             compressedSize: 0,
             uncompressedSize: 0,
+            pathInArchive: filePath.zipArchivePath,
             filename: filePath,
             extraFields: [],
             comment: "",
@@ -346,7 +389,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         var fileHeader = fileHeader
         let extraFieldsBuffer = getExtraFieldBuffer(&fileHeader, localFileHeader: false)
         let (fileModificationTime, fileModificationDate) = fileHeader.fileModification.msdosDate()
-        let filename = fileHeader.isDirectory ? "\(fileHeader.filename)/" : fileHeader.filename.string
+        let filename = pathInArchive(for: fileHeader)
 
         try self.storage.writeIntegers(
             Zip.fileHeaderSignature,
@@ -375,7 +418,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
     func writeLocalFileHeader(_ fileHeader: Zip.FileHeader) throws {
         var fileHeader = fileHeader
         let extraFields = getExtraFieldBuffer(&fileHeader, localFileHeader: true)
-        let filename = fileHeader.isDirectory ? "\(fileHeader.filename)/" : fileHeader.filename.string
+        let filename = pathInArchive(for: fileHeader)
 
         let (fileModificationTime, fileModificationDate) = fileHeader.fileModification.msdosDate()
         try self.storage.writeIntegers(
@@ -393,6 +436,15 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         )
         try self.storage.writeString(filename)
         try self.storage.write(bytes: extraFields)
+    }
+
+    private func pathInArchive(for fileHeader: Zip.FileHeader) -> String {
+        guard fileHeader.isDirectory,
+            !fileHeader.pathInArchive.hasSuffix("/")
+        else {
+            return fileHeader.pathInArchive
+        }
+        return fileHeader.pathInArchive + "/"
     }
 
     func getExtraFieldBuffer(_ fileHeader: inout Zip.FileHeader, localFileHeader: Bool) -> ArraySlice<UInt8> {

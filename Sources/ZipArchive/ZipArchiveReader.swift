@@ -103,6 +103,9 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
             guard fileSize >= 12 else {
                 throw ZipArchiveReaderError.invalidFileHeader
             }
+            guard password != nil else {
+                throw ZipArchiveReaderError.encryptedFilesRequirePassword
+            }
             encryptionKeys = try self.storage.readBytes(length: 12)
             fileSize -= 12
         } else {
@@ -134,6 +137,9 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
             from: fileBytes,
             uncompressedSize: uncompressedByteCount
         )
+        guard uncompressedBytes.count == uncompressedByteCount else {
+            throw ZipArchiveReaderError.uncompressedSizeMismatch
+        }
         // Verify CRC32
         let crc = crc32(0, bytes: uncompressedBytes)
         guard crc == preparedEntry.expectedChecksum else {
@@ -255,7 +261,8 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
         )
         try self.storage.seek(numericCast(file.offsetOfLocalHeader))
         let localHeader = try readLocalFileHeader()
-        guard localHeader.filename == file.filename,
+        guard localHeader.pathInArchive == file.pathInArchive,
+            localHeader.filename == file.filename,
             localHeader.flags == file.flags,
             localHeader.compressionMethod == file.compressionMethod
         else {
@@ -349,6 +356,7 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
             crc32: crc32,
             compressedSize: compressedSize64,
             uncompressedSize: uncompressedSize64,
+            pathInArchive: filename,
             filename: .init(filename),
             extraFields: extraFields
         )
@@ -432,6 +440,7 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
             crc32: crc32,
             compressedSize: compressedSize64,
             uncompressedSize: uncompressedSize64,
+            pathInArchive: filename,
             filename: .init(filename),
             extraFields: extraFields,
             comment: comment,

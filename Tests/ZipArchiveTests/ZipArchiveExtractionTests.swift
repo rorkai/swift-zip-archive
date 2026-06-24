@@ -54,6 +54,98 @@ struct ZipArchiveExtractionTests {
     }
 
     @Test
+    func bufferedReadRejectsStoredSizeMismatch() throws {
+        let contents: [UInt8] = [1, 2, 3, 4]
+        let writer = ZipArchiveWriter(
+            configuration: .init(compression: .noCompression)
+        )
+        try writer.writeFile(filename: "stored.bin", contents: contents)
+        writer.newDirectoryEntries[0].uncompressedSize = 5
+        var archive = Array(try writer.finalizeBuffer())
+
+        // Corrupt both size declarations while retaining the payload CRC so
+        // the test isolates decompressed-size validation.
+        replaceLittleEndianUInt32(5, at: 22, in: &archive)
+
+        let reader = try ZipArchiveReader(buffer: archive)
+        let entry = try #require(try reader.readDirectory().first)
+
+        #expect(throws: ZipArchiveReaderError.uncompressedSizeMismatch) {
+            _ = try reader.readFile(entry)
+        }
+    }
+
+    @Test
+    func bufferedReadRejectsMissingPasswordBeforePayloadRead() throws {
+        let contents = [UInt8](repeating: 0x61, count: 4_096)
+        let writer = ZipArchiveWriter(
+            configuration: .init(compression: .noCompression)
+        )
+        try writer.writeFile(
+            filename: "encrypted.bin",
+            contents: contents,
+            password: "secret"
+        )
+        let storage = ReadTrackingStorage(
+            Array(try writer.finalizeBuffer())
+        )
+        let reader = try ZipArchiveReader(
+            storage,
+            configuration: .init()
+        )
+        let entry = try #require(try reader.readDirectory().first)
+        storage.bytesRead = 0
+
+        #expect(
+            throws: ZipArchiveReaderError.encryptedFilesRequirePassword
+        ) {
+            _ = try reader.readFile(entry)
+        }
+        #expect(storage.bytesRead < contents.count)
+    }
+
+    @Test
+    func streamingDeflateRejectsTrailingCompressedBytes() throws {
+        let compression = ZlibDeflateCompression()
+        let compressed =
+            try compression.deflate(
+                from: Array("contents".utf8)
+            ) + [0xff]
+        var hasReadInput = false
+
+        #expect(throws: ZipArchiveReaderError.compressionError) {
+            try compression.inflate(
+                bufferSize: compressed.count,
+                read: { _ in
+                    guard !hasReadInput else {
+                        return []
+                    }
+                    hasReadInput = true
+                    return compressed
+                },
+                write: { _ in }
+            )
+        }
+    }
+
+    @Test
+    func writerPreservesPortableArchivePathSyntax() throws {
+        let writer = ZipArchiveWriter()
+        try writer.writeFile(
+            filename: "folder/file.txt",
+            contents: [1]
+        )
+        let reader = try ZipArchiveReader(
+            buffer: writer.finalizeBuffer()
+        )
+        let entry = try #require(
+            try reader.readDirectory().first { !$0.isDirectory }
+        )
+
+        #expect(entry.pathInArchive == "folder/file.txt")
+    }
+
+    @Test
     func rejectsParentTraversalBeforeWriting() throws {
         let identifier = UUID().uuidString
         let destination = FilePath("Extraction-\(identifier)")
@@ -206,7 +298,7 @@ struct ZipArchiveExtractionTests {
                 fileURLWithPath: destination.appending("Current").string
             )
         )
-        #expect(String(decoding: contents, as: UTF8.self) == "Versions/A")
+        #expect(String(bytes: contents, encoding: .utf8) == "Versions/A")
     }
 
     @Test
@@ -407,7 +499,10 @@ struct ZipArchiveExtractionTests {
                 fileURLWithPath: destination.appending("streamed.bin").string
             )
         )
-        #expect(String(decoding: contents, as: UTF8.self) == "streamed contents")
+        #expect(
+            String(bytes: contents, encoding: .utf8)
+                == "streamed contents"
+        )
     }
 
     #if !os(Windows)
@@ -574,7 +669,7 @@ struct ZipArchiveExtractionTests {
         let contents = try Data(
             contentsOf: URL(fileURLWithPath: existingFile.string)
         )
-        #expect(String(decoding: contents, as: UTF8.self) == "original")
+        #expect(String(bytes: contents, encoding: .utf8) == "original")
     }
 
     @Test
@@ -859,5 +954,47 @@ struct ZipArchiveExtractionTests {
                 write: { _ in }
             )
         }
+    }
+}
+
+private final class ReadTrackingStorage: ZipReadableStorage {
+    typealias OutputBuffer = ArraySlice<UInt8>
+
+    private let storage: ZipMemoryStorage<[UInt8]>
+    var bytesRead = 0
+
+    init(_ bytes: [UInt8]) {
+        self.storage = ZipMemoryStorage(bytes)
+    }
+
+    func read(_ count: Int) throws(ZipStorageError) -> ArraySlice<UInt8> {
+        bytesRead += count
+        return try storage.read(count)
+    }
+
+    @discardableResult
+    func seek(_ index: Int64) throws(ZipStorageError) -> Int64 {
+        try storage.seek(index)
+    }
+
+    @discardableResult
+    func seekOffset(_ offset: Int64) throws(ZipStorageError) -> Int64 {
+        try storage.seekOffset(offset)
+    }
+
+    @discardableResult
+    func seekEnd(_ offset: Int64) throws(ZipStorageError) -> Int64 {
+        try storage.seekEnd(offset)
+    }
+}
+
+private func replaceLittleEndianUInt32(
+    _ value: UInt32,
+    at offset: Int,
+    in bytes: inout [UInt8]
+) {
+    var value = value.littleEndian
+    withUnsafeBytes(of: &value) {
+        bytes.replaceSubrange(offset..<(offset + $0.count), with: $0)
     }
 }

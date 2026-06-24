@@ -8,6 +8,10 @@
 
 import SystemPackage
 
+#if os(Windows)
+import Foundation
+#endif
+
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -84,9 +88,13 @@ extension Errno {
 
 extension FileDescriptor {
     static func remove(_ filePath: FilePath) throws {
+        #if os(Windows)
+        try FileManager.default.removeItem(atPath: filePath.string)
+        #else
         try filePath.withPlatformString { filename in
             try nothingOrErrno(retryOnInterrupt: true) { system_remove(filename) }.get()
         }
+        #endif
     }
 }
 

@@ -290,7 +290,7 @@ extension ZipArchiveReader {
             else {
                 throw ZipArchiveReaderError.symbolicLinkNotAllowed
             }
-            let path = try validatedExtractionPath(entry.filename)
+            let path = try validatedExtractionPath(entry.pathInArchive)
             guard paths.insert(path.string).inserted else {
                 throw ZipArchiveReaderError.duplicateExtractionPath
             }
@@ -317,12 +317,16 @@ extension ZipArchiveReader {
     /// ZIP uses `/` on every platform, so alternate separators must not become
     /// path components only after the destination file system interprets them.
     private func validatedExtractionPath(
-        _ archivedPath: FilePath
+        _ pathInArchive: String
     ) throws -> FilePath {
-        guard archivedPath.root == nil,
-            !archivedPath.string.contains("\\"),
-            !archivedPath.string.utf8.contains(0)
+        guard !pathInArchive.contains("\\"),
+            !pathInArchive.utf8.contains(0)
         else {
+            throw ZipArchiveReaderError.unsafeExtractionPath
+        }
+
+        let archivedPath = FilePath(pathInArchive)
+        guard archivedPath.root == nil else {
             throw ZipArchiveReaderError.unsafeExtractionPath
         }
 
