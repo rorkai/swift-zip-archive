@@ -168,7 +168,7 @@ extension ZipArchiveReader {
                         }
                     }
                 } catch {
-                    try? FileDescriptor.remove(fullFilePath)
+                    try? FileDescriptor.removeFile(fullFilePath)
                     throw error
                 }
             }

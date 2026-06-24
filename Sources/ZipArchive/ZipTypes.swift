@@ -161,6 +161,12 @@ public enum Zip {
             }
             static var msdos: Self { .init(rawValue: 0) }
             static var unix: Self { .init(rawValue: 0x3) }
+            /// OS X (Darwin), whose external attributes use Unix mode bits.
+            static var darwin: Self { .init(rawValue: 0x13) }
+
+            var usesUnixFileAttributes: Bool {
+                self == .unix || self == .darwin
+            }
         }
         public init(system: System, version: UInt8) {
             self.init(rawValue: numericCast(system.rawValue) << 8 | numericCast(version))
@@ -200,14 +206,14 @@ public enum Zip {
 
         /// Whether the entry represents a directory.
         public var isDirectory: Bool {
-            versionMadeBy.system == .unix
+            versionMadeBy.system.usesUnixFileAttributes
                 ? self.externalAttributes.unixAttributes.contains(.isDirectory)
                 : self.externalAttributes.msdosAttributes.contains(.isDirectory)
         }
 
         /// Whether the entry stores a Unix symbolic link.
         public var isSymbolicLink: Bool {
-            versionMadeBy.system == .unix
+            versionMadeBy.system.usesUnixFileAttributes
                 && self.externalAttributes.unixAttributes.contains(
                     .isSymbolicLink
                 )

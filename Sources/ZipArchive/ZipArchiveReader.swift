@@ -185,7 +185,10 @@ public final class ZipArchiveReader<Storage: ZipReadableStorage> {
 
         var cryptKey: CryptKey?
         if preparedEntry.localHeader.flags.contains(.encrypted) {
-            guard let password, compressedSize >= 12 else {
+            guard compressedSize >= 12 else {
+                throw ZipArchiveReaderError.invalidFileHeader
+            }
+            guard let password else {
                 throw ZipArchiveReaderError.encryptedFilesRequirePassword
             }
             var key = CryptKey(password: password)

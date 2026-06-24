@@ -168,6 +168,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         sourceFilePath: FilePath,
         password: String?
     ) throws {
+        try validate(pathInArchive: pathInArchive)
         let fileDescriptor = try FileDescriptor.open(
             sourceFilePath,
             .readOnly
@@ -240,6 +241,7 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         metadata: Zip.EntryMetadata = .init(),
         password: String? = nil
     ) throws {
+        try validate(pathInArchive: pathInArchive)
         let existingFileHeader =
             self.directory.first(where: { $0.filename == filePath })
             ?? self.newDirectoryEntries.first(where: { $0.filename == filePath })
@@ -301,6 +303,13 @@ public final class ZipArchiveWriter<Storage: ZipWriteableStorage> {
         try storage.write(bytes: compressedContents)
 
         self.newDirectoryEntries.append(fileHeader)
+    }
+
+    /// Rejects entry names that cannot be represented portably in a ZIP archive.
+    private func validate(pathInArchive: String) throws {
+        guard !pathInArchive.contains("\\") else {
+            throw ZipArchiveWriterError.invalidEntryPath
+        }
     }
 
     /// Rejects metadata that cannot be represented by the ZIP fields emitted
@@ -642,6 +651,7 @@ extension ZipArchiveWriter {
 public struct ZipArchiveWriterError: Error, Equatable {
     internal enum Value {
         case fileAlreadyExists
+        case invalidEntryPath
         case entryCommentTooLong
         case entryModificationDateOutOfRange
     }
@@ -649,6 +659,12 @@ public struct ZipArchiveWriterError: Error, Equatable {
 
     /// File being added to zip archive already exists
     public static var fileAlreadyExists: Self { .init(value: .fileAlreadyExists) }
+
+    /// The entry path uses a separator that ZIP readers cannot interpret portably.
+    ///
+    /// ZIP entry paths always use `/`; backslashes are rejected instead of
+    /// changing their meaning on platforms where they are valid filename bytes.
+    public static var invalidEntryPath: Self { .init(value: .invalidEntryPath) }
 
     /// The entry comment cannot be represented in a ZIP central directory.
     ///

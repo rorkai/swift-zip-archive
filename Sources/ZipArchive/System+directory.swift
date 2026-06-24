@@ -96,12 +96,31 @@ extension FileDescriptor {
         }
         #endif
     }
+
+    /// Removes a file or symbolic link without recursively deleting directories.
+    static func removeFile(_ filePath: FilePath) throws {
+        try filePath.withPlatformString { filename in
+            try nothingOrErrno(retryOnInterrupt: true) {
+                system_unlink(filename)
+            }.get()
+        }
+    }
 }
 
 func system_remove(
     _ path: UnsafePointer<CInterop.PlatformChar>
 ) -> CInt {
     remove(path)
+}
+
+func system_unlink(
+    _ path: UnsafePointer<CInterop.PlatformChar>
+) -> CInt {
+    #if os(Windows)
+    ucrt._wunlink(path)
+    #else
+    unlink(path)
+    #endif
 }
 
 #if !os(Windows) && !os(WASI)

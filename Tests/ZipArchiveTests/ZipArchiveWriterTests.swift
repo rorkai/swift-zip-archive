@@ -100,6 +100,30 @@ struct ZipArchiveWriterTests {
     }
 
     @Test
+    func testAddingContentsRejectsNonportableArchivePath() {
+        let writer = ZipArchiveWriter()
+
+        #expect(throws: ZipArchiveWriterError.invalidEntryPath) {
+            try writer.writeFile(
+                filename: #"folder\file.txt"#,
+                contents: []
+            )
+        }
+    }
+
+    @Test
+    func testAddingSourceFileRejectsNonportableArchivePathBeforeOpeningSource() {
+        let writer = ZipArchiveWriter()
+
+        #expect(throws: ZipArchiveWriterError.invalidEntryPath) {
+            try writer.writeFile(
+                filename: #"folder\file.txt"#,
+                sourceFile: "missing-source-file"
+            )
+        }
+    }
+
+    @Test
     func testAddingFileToNonEmptyZipArchive() throws {
         // write original zip archive
         let writer = ZipArchiveWriter()

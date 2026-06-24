@@ -105,6 +105,32 @@ struct ZipArchiveExtractionTests {
     }
 
     @Test
+    func streamingReadRejectsTruncatedEncryptionHeader() throws {
+        let writer = ZipArchiveWriter(
+            configuration: .init(compression: .noCompression)
+        )
+        try writer.writeFile(
+            filename: "encrypted.bin",
+            contents: [1],
+            password: "secret"
+        )
+        writer.newDirectoryEntries[0].compressedSize = 11
+        var archive = Array(try writer.finalizeBuffer())
+        replaceLittleEndianUInt32(11, at: 18, in: &archive)
+
+        let reader = try ZipArchiveReader(buffer: archive)
+        let entry = try #require(try reader.readDirectory().first)
+
+        #expect(throws: ZipArchiveReaderError.invalidFileHeader) {
+            try reader.readFile(
+                entry,
+                password: "secret",
+                bufferSize: 4
+            ) { _ in }
+        }
+    }
+
+    @Test
     func streamingDeflateRejectsTrailingCompressedBytes() throws {
         let compression = ZlibDeflateCompression()
         let compressed =
@@ -261,6 +287,47 @@ struct ZipArchiveExtractionTests {
                 atPath: destination.appending("Current").string
             )
         )
+    }
+
+    @Test
+    func rejectsDarwinSymbolicLinksByDefault() throws {
+        let destination = FilePath("Extraction-\(UUID().uuidString)")
+        try DirectoryDescriptor.mkdir(
+            destination,
+            options: .ignoreExistingDirectoryError,
+            permissions: [.ownerReadWriteExecute]
+        )
+        defer {
+            try? DirectoryDescriptor.recursiveDelete(destination)
+        }
+
+        let writer = ZipArchiveWriter()
+        try writer.writeFile(
+            filename: "Current",
+            contents: Array("Versions/A".utf8),
+            metadata: .init(
+                externalAttributes: .unix([
+                    .isSymbolicLink,
+                    .permissions([.ownerReadWrite]),
+                ])
+            )
+        )
+        var archive = Array(try writer.finalizeBuffer())
+        let centralDirectoryOffset = Int(
+            writer.endOfCentralDirectoryRecord.offsetOfCentralDirectory
+        )
+        // PKWARE host system 19 marks OS X (Darwin), whose external attributes
+        // use the same Unix file-type bits as host system 3.
+        replaceLittleEndianUInt16(
+            0x131e,
+            at: centralDirectoryOffset + 4,
+            in: &archive
+        )
+        let reader = try ZipArchiveReader(buffer: archive)
+
+        #expect(throws: ZipArchiveReaderError.symbolicLinkNotAllowed) {
+            try reader.extract(to: destination)
+        }
     }
 
     @Test
@@ -591,9 +658,14 @@ struct ZipArchiveExtractionTests {
 
         let writer = ZipArchiveWriter()
         try writer.writeFile(
-            filename: #"folder\file.txt"#,
+            filename: "folder/file.txt",
             contents: [1]
         )
+        let fileEntryIndex = writer.newDirectoryEntries.index(
+            before: writer.newDirectoryEntries.endIndex
+        )
+        writer.newDirectoryEntries[fileEntryIndex].pathInArchive =
+            #"folder\file.txt"#
         let reader = try ZipArchiveReader(buffer: writer.finalizeBuffer())
 
         #expect(throws: ZipArchiveReaderError.unsafeExtractionPath) {
@@ -850,6 +922,24 @@ struct ZipArchiveExtractionTests {
     }
 
     @Test
+    func fileOnlyCleanupDoesNotRemoveDirectories() throws {
+        let directory = FilePath("Extraction-\(UUID().uuidString)")
+        try DirectoryDescriptor.mkdir(
+            directory,
+            options: .ignoreExistingDirectoryError,
+            permissions: [.ownerReadWriteExecute]
+        )
+        defer {
+            try? DirectoryDescriptor.recursiveDelete(directory)
+        }
+
+        #expect(throws: (any Error).self) {
+            try FileDescriptor.removeFile(directory)
+        }
+        #expect(FileManager.default.fileExists(atPath: directory.string))
+    }
+
+    @Test
     func rejectsOversizedChunksFromStreamingCompression() throws {
         struct OversizedStreamingCompression: ZipStreamingCompression {
             let method = Zip.FileCompressionMethod.reserved1
@@ -968,8 +1058,9 @@ private final class ReadTrackingStorage: ZipReadableStorage {
     }
 
     func read(_ count: Int) throws(ZipStorageError) -> ArraySlice<UInt8> {
-        bytesRead += count
-        return try storage.read(count)
+        let bytes = try storage.read(count)
+        bytesRead += bytes.count
+        return bytes
     }
 
     @discardableResult
@@ -990,6 +1081,17 @@ private final class ReadTrackingStorage: ZipReadableStorage {
 
 private func replaceLittleEndianUInt32(
     _ value: UInt32,
+    at offset: Int,
+    in bytes: inout [UInt8]
+) {
+    var value = value.littleEndian
+    withUnsafeBytes(of: &value) {
+        bytes.replaceSubrange(offset..<(offset + $0.count), with: $0)
+    }
+}
+
+private func replaceLittleEndianUInt16(
+    _ value: UInt16,
     at offset: Int,
     in bytes: inout [UInt8]
 ) {
