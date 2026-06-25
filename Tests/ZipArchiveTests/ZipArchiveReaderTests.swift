@@ -40,7 +40,7 @@ struct ZipArchiveReaderTests {
     }
 
     @Test func msdosDateClampsDatesAfterTheRepresentableRange() {
-        let date = Date(timeIntervalSince1970: 4_354_819_200)
+        let date = Date(timeIntervalSince1970: 4_354_905_600)
 
         let encoded = date.msdosDate()
 
