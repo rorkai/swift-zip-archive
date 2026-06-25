@@ -10,5 +10,24 @@ jobs:
     uses: swiftlang/github-workflows/.github/workflows/soundness.yml@9abcbf258bca0c8d2157b1bdad4193381f97a866
     with:
       api_breakage_check_container_image: swift:latest
-      docs_check_container_image: swift:latest
+      docs_check_enabled: false
       python_lint_check_enabled: false
+
+  documentation:
+    name: Documentation check
+    runs-on: ubuntu-latest
+    container:
+      image: swift:latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      # The reusable workflow fetches its helper script from main, where
+      # swiftlang/github-workflows#291 currently breaks .spi.yml targets.
+      - name: Checkout documentation checker
+        uses: actions/checkout@v4
+        with:
+          repository: swiftlang/github-workflows
+          ref: 9abcbf258bca0c8d2157b1bdad4193381f97a866
+          path: github-workflows
+      - name: Run documentation check
+        run: github-workflows/.github/workflows/scripts/check-docs.sh
