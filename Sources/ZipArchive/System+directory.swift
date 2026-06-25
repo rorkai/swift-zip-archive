@@ -127,7 +127,8 @@ func system_unlink(
 
 internal typealias system_dirent = dirent
 internal let SYSTEM_DT_DIR = DT_DIR
-#if os(Linux) || os(Android)
+// These C library modules import DIR as an opaque type.
+#if os(Linux) || os(Android) || os(FreeBSD) || os(OpenBSD)
 internal typealias system_DIRPtr = OpaquePointer
 #else
 internal typealias system_DIRPtr = UnsafeMutablePointer<DIR>
