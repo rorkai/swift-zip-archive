@@ -115,7 +115,8 @@ jobs:
           echo "$META_DATA_CONTENT" > /usr/local/share/cidata/meta-data
           echo "$USER_DATA_CONTENT" > /usr/local/share/cidata/user-data
           mkdir -p /usr/local/share/cidata/repo
-          git archive HEAD | tar -x -C /usr/local/share/cidata/repo
+          tar --exclude=.git -C "$GITHUB_WORKSPACE" -cf - . \
+            | tar -x -C /usr/local/share/cidata/repo
       - name: Test
         run: /usr/local/bin/cmd.sh
       - name: Report result
