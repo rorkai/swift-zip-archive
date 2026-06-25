@@ -105,4 +105,4 @@ ZipArchive currently supports
 - CRC32 checks
 - Traditional PKWARE Decryption/Encryption
  
-ZipArchive supports Apple OSs, Linux and Windows
+ZipArchive supports Apple OSs, Linux, OpenBSD, and Windows.
