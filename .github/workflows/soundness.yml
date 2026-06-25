@@ -30,4 +30,6 @@ jobs:
           ref: 9abcbf258bca0c8d2157b1bdad4193381f97a866
           path: github-workflows
       - name: Run documentation check
+        env:
+          ADDITIONAL_DOCC_ARGUMENTS: ""
         run: github-workflows/.github/workflows/scripts/check-docs.sh
